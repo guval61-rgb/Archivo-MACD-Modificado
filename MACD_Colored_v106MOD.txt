@@ -1,0 +1,237 @@
+//+------------------------------------------------------------------+
+//|                                         MACD_Colored_v106MOD.mq4 |
+//+------------------------------------------------------------------+
+
+#property  copyright "Copyright © 2007, Herb Spirit, Inc., portions Josh Jones"
+#property  link      "http://www.herbspirit.com/mql"
+
+/*
+Original version "Custom MACD.mq4" is Copyright © 2007, Herb Spirit, Inc.,
+portions by Josh Jones at http://www.herbspirit.com/mql. 
+
+Modification "MACD_Colored_v102" implemented static macd background levels
+at +/- 15/30/45, and end of macd pip count (to change histogram color).
+
+Modification "MACD_Colored_v103" by Josh Dance (forexfactory)
+implements various signals, alerts and expanded macd background levels.
+
+Modification "MACD_Colored_v104" by Josh Dance (forexfactory) adds ability
+to show signal line for any macd input values (5/13/6, 12/26/9, etc.),
+draws the macd line as a border around the histogram, and variablizes
+the process of defining the macd background levels to better fit different
+currency pairs.
+
+Modification "MACD_Colored_v105" by Traderathome adds a solid zero line
+and expands code for the macd background levels so that all separate
+timeframes can be independently further adjusted in the hard code.
+
+Modification "MACD_Colored_v106" by Kamil2079 (forexfactory)
+now it works with 5 (3 for JPY) digits platform as well.
+*/
+
+#define INDICATOR_NAME  "MACD_Colored"
+#define INDICATOR_VERSION "v106"
+
+//---- indicator settings
+#property  indicator_separate_window
+#property  indicator_buffers 5
+#property  indicator_color1  LimeGreen //moving up
+#property  indicator_color2  Red  //moving down
+#property  indicator_color3  DodgerBlue //signal line
+#property  indicator_color4  Purple //macd line
+#property  indicator_color5  Black //solid study zero line
+#property  indicator_width1  3
+#property  indicator_width2  3
+#property  indicator_width3  1
+#property  indicator_width4  1
+#property  indicator_width5  1
+#property  indicator_level1  0
+#property  indicator_levelcolor  SlateGray //for macd background levels
+#property  indicator_levelstyle  STYLE_SOLID
+
+
+extern bool ShowSignal=true;
+extern int FastEMA=3;
+extern int SlowEMA=15;
+extern int SignalSMA=5;
+extern int FontSize=8;
+extern color FontColor=DodgerBlue;
+
+//---- indicator buffers
+double     MacdBuffer[];
+double     MacdBufferUp[];
+double     MacdBufferDn[];
+double     SignalBuffer[];
+double     BorderLine[];
+double     ZeroLine[];
+double     Pnt;
+datetime nextbartime;
+datetime alertbartime,nextalerttime;
+string shortname;
+int alertcount;
+//+------------------------------------------------------------------+
+//| Custom indicator initialization function                         |
+//+------------------------------------------------------------------+
+int init()
+  {
+  //---- drawing settings  
+   SetIndexStyle(0,DRAW_HISTOGRAM);
+   SetIndexStyle(1,DRAW_HISTOGRAM);
+   SetIndexStyle(2,DRAW_LINE);
+   SetIndexStyle(3,DRAW_LINE);
+   SetIndexStyle(4,DRAW_LINE,STYLE_SOLID);
+  
+//---- macd background levels: adjust start price to accomdate other pairs
+   double lastPrice = iClose(NULL,0,1);
+   if (StringFind(Symbol(), "JPY", 0) != -1)
+   {lastPrice = lastPrice / 100;}
+
+//---- Setting the right Point base value 
+   Pnt = Point;
+   if (StringFind(Symbol(), "JPY", 0) != -1)
+   { 
+      if(Digits == 3) Pnt = Pnt*10;
+   }
+   else
+   {
+      if(Digits == 5) Pnt = Pnt*10;
+   }
+
+
+   SetIndexDrawBegin(1,SlowEMA);
+   IndicatorDigits(1); 
+ 
+ //---- indicator buffers mapping
+   SetIndexBuffer(0,MacdBufferUp);
+   SetIndexBuffer(1,MacdBufferDn);
+   SetIndexBuffer(2,SignalBuffer);
+   SetIndexBuffer(3,BorderLine);
+   SetIndexBuffer(4,ZeroLine);
+
+//---- name for DataWindow and indicator subwindow label
+	shortname=WindowExpertName();
+   shortname=shortname+" ("+FastEMA+","+SlowEMA+","+SignalSMA+")";
+   IndicatorShortName(shortname);
+   SetIndexLabel(0,"MACD Up");
+   SetIndexLabel(1,"MACD Down");
+   SetIndexLabel(2,"Signal");
+   SetIndexLabel(3,"Border");
+   ArrayResize(MacdBuffer,Bars-SlowEMA);
+   ArraySetAsSeries(MacdBuffer,true); 
+
+
+	nextbartime=0;
+   return(0);
+}
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+int deinit()
+{
+	string objname=shortname+","+Symbol()+","+Period();
+	int i;
+	while(i<ObjectsTotal())
+	{
+		string nextobj=ObjectName(i);
+		if(StringSubstr(nextobj,0,StringLen(objname))==objname)
+			ObjectDelete(nextobj);
+		else
+			i++;
+	}
+	return(0);
+}
+
+//+------------------------------------------------------------------+
+//| Moving Averages Convergence/Divergence                           |
+//+------------------------------------------------------------------+
+int start()
+  {
+   int limit;
+   int counted_bars=IndicatorCounted();
+
+//---- last counted bar will be recounted
+	if(Time[0]!=nextbartime)
+	{
+		limit=Bars-SlowEMA;
+	   ArrayResize(MacdBuffer,limit);
+		nextbartime=Time[0];
+	}
+	else
+   	limit=MathMin(Bars-SlowEMA,Bars-counted_bars);
+
+//---- macd counted in the 1-st buffer
+   for(int i=0;i<limit;i++) {
+      MacdBuffer[i]=(iMA(NULL,0,FastEMA,0,MODE_EMA,PRICE_CLOSE,i)-
+                     iMA(NULL,0,SlowEMA,0,MODE_EMA,PRICE_CLOSE,i))/Pnt;
+   }
+// macd colored set here
+	bool firstsignal=true;
+   for(i=0;i<limit;i++)
+   {
+  		if(MacdBuffer[i]>MacdBuffer[i+1])
+   	{
+  			MacdBufferUp[i]=MacdBuffer[i];
+  			MacdBufferDn[i]=0;
+   	}
+  		else
+  		{
+  			MacdBufferDn[i]=MacdBuffer[i];
+   		MacdBufferUp[i]=0;
+   	}
+
+   }
+
+//---- signal line counted in the 2-nd buffer
+   for(i=0; i<limit; i++) {
+      SignalBuffer[i]=iMAOnArray(MacdBuffer,Bars,SignalSMA,0,MODE_SMA,i);
+      BorderLine[i]=MacdBuffer[i];
+      ZeroLine[i]=0;
+   }
+
+//---- pips to change color calculation
+	double priMACD=(iMA(NULL,0,FastEMA,0,MODE_EMA,PRICE_CLOSE,1)-
+      		iMA(NULL,0,SlowEMA,0,MODE_EMA,PRICE_CLOSE,1))/Pnt;
+   double close[];
+   ArrayResize(close,Bars);
+   ArraySetAsSeries(close,true);
+   ArrayCopy(close,Close,0,0,ArraySize(close));
+	double curMACD=(iMAOnArray(close,0,FastEMA,0,MODE_EMA,0)-
+      		iMAOnArray(close,0,SlowEMA,0,MODE_EMA,0))/Pnt;
+	int pips;
+	if(curMACD<priMACD)
+	{
+		while(curMACD<priMACD)
+		{
+			pips++;
+			close[0]+=Pnt;
+			curMACD=(iMAOnArray(close,0,FastEMA,0,MODE_EMA,0)-
+      		      iMAOnArray(close,0,SlowEMA,0,MODE_EMA,0))/Pnt;
+		}
+	}
+	else
+	{
+		while(curMACD>priMACD)
+		{
+			pips--;
+			close[0]-=Pnt;
+			curMACD=(iMAOnArray(close,0,FastEMA,0,MODE_EMA,0)-
+      		iMAOnArray(close,0,SlowEMA,0,MODE_EMA,0))/Pnt;
+		}
+	}
+	string objname=shortname+","+Symbol()+","+Period()+",pips";
+	if(ObjectFind(objname)<0)
+	   ObjectCreate(objname,OBJ_TEXT,
+		      WindowFind(shortname),
+		      Time[0]+Period()*60*2,MacdBuffer[0]/2);
+	else
+		ObjectMove(objname,0,Time[0]+Period()*60*2,MacdBuffer[0]/2);
+		
+	if(pips!=0)
+		ObjectSetText(objname,DoubleToStr(pips,0),FontSize,"Courier",FontColor);
+	else
+		ObjectSetText(objname," ",FontSize,"Courier",FontColor);
+
+
+   return(0);
+}
